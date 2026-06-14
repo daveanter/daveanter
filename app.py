@@ -407,209 +407,184 @@ def _excel_export(week_start_str, employee_data):
     wb  = Workbook()
     wk  = date.fromisoformat(week_start_str)
 
-    # ── Tab 1: Schedule Summary ───────────────────────────────────────
-    ws1 = wb.active
-    ws1.title = "Schedule Summary"
+    ws       = wb.active
+    ws.title = "Weekly Timeline"
 
-    ws1.column_dimensions['A'].width = 22
-    for c in range(2, 11):
-        ws1.column_dimensions[get_column_letter(c)].width = 16
+    N_SLOTS    = len(TIMELINE_SLOTS)        # 26 slots (8:00–20:30)
+    COL_NAME_L = 1                          # A  — employee name left
+    COL_SLOTS  = 2                          # B  — first time slot
+    COL_NAME_R = COL_SLOTS + N_SLOTS        # AB — employee name right  (col 28)
+    COL_HRS    = COL_NAME_R + 1             # AC — daily hours           (col 29)
+    LAST_COL   = COL_HRS
+    last_ltr   = get_column_letter(LAST_COL)
 
-    ws1.row_dimensions[1].height = 34
-    ws1.merge_cells('A1:J1')
-    c=ws1['A1']
-    c.value   = f"Employee Schedule  —  Week of {wk.strftime('%B %d, %Y')}"
-    c.fill    = _xfill('1F4E79')
-    c.font    = _xfont(bold=True, color='FFFFFF', size=14)
+    # ── Column widths ──────────────────────────────────────────────────────────
+    ws.column_dimensions['A'].width = 20
+    for ci in range(COL_SLOTS, COL_SLOTS + N_SLOTS):
+        ws.column_dimensions[get_column_letter(ci)].width = 2.6
+    ws.column_dimensions[get_column_letter(COL_NAME_R)].width = 20
+    ws.column_dimensions[get_column_letter(COL_HRS)].width    = 7
+
+    cur = 1
+
+    # ── Row 1: sheet title ─────────────────────────────────────────────────────
+    ws.row_dimensions[cur].height = 28
+    ws.merge_cells(f'A{cur}:{last_ltr}{cur}')
+    c = ws.cell(row=cur, column=1,
+                value=(f"Staff Coverage Timeline  —  Week of {wk.strftime('%B %d, %Y')}"
+                       "  |  Mon – Fri  |  8 AM – 9 PM  |  30-min slots"))
+    c.fill = _xfill('1F4E79'); c.font = _xfont(bold=True, color='FFFFFF', size=13)
     c.alignment = _xalign()
+    cur += 1
 
-    ws1.row_dimensions[2].height = 36
-    hdrs = ['Employee'] + [
-        f"{DAYS_SHORT[i]}\n{(wk+timedelta(days=i)).strftime('%b %d')}"
-        for i in range(7)
-    ] + ['Status','Total Hrs']
-    for ci, h in enumerate(hdrs, 1):
-        c = ws1.cell(row=2, column=ci, value=h)
-        c.fill      = _xfill('D6E4F0')
-        c.font      = _xfont(bold=True, color='1F4E79', size=10)
-        c.alignment = _xalign(wrap=True)
-        c.border    = _xthin()
-
-    STATUS_COLORS = {'approved':'C6EFCE','employee_approved':'DAEEF3',
-                     'submitted':'FFEB9C','changes_requested':'FCE4D6','pending':'F2F2F2'}
-
-    for ri, emp in enumerate(employee_data, 3):
-        ws1.row_dimensions[ri].height = 44
-        bg = 'FAFAFA' if ri % 2 == 1 else 'FFFFFF'
-
-        c = ws1.cell(row=ri, column=1, value=emp['name'])
-        c.font      = _xfont(bold=True, size=11)
-        c.alignment = _xalign(h='left')
-        c.border    = _xthin()
-        c.fill      = _xfill(bg)
-
-        total = 0.0
-        for di in range(7):
-            s = emp['shifts'].get(di)
-            if s:
-                hrs = worked_hours(s['start_time'],s['end_time'],s['lunch_minutes'],s['is_off'])
-                total += hrs
-                if s['is_off']:
-                    txt = 'Day Off'; cbg='F2F2F2'
-                else:
-                    st=s['start_time'] or ''; et=s['end_time'] or ''
-                    lm=s['lunch_minutes']
-                    ls=s.get('lunch_start_time') or ''
-                    lunch_str=(f"{ls}" if ls else "") + (f"  {lm}m lunch" if lm else "  no lunch")
-                    txt=f"{st}–{et}\n{lunch_str.strip()}\n{hrs:.1f} hrs"
-                    cbg='E2EFDA' if di<5 else 'EDE7F6'
-            else:
-                txt='—'; cbg='F2F2F2'
-            c = ws1.cell(row=ri, column=di+2, value=txt)
-            c.fill      = _xfill(cbg)
-            c.font      = _xfont(size=9)
-            c.alignment = _xalign(wrap=True)
-            c.border    = _xthin()
-
-        c = ws1.cell(row=ri, column=9,
-                     value=STATUS_META.get(emp['status'],('?',''))[0])
-        c.fill      = _xfill(STATUS_COLORS.get(emp['status'],'F2F2F2'))
-        c.font      = _xfont(size=9)
-        c.alignment = _xalign()
-        c.border    = _xthin()
-
-        c = ws1.cell(row=ri, column=10, value=round(total,1))
-        c.fill      = _xfill('DAEEF3')
-        c.font      = _xfont(bold=True, size=11)
-        c.alignment = _xalign()
-        c.border    = _xthin()
-
-    ws1.freeze_panes = 'B3'
-    ws1.page_setup.orientation='landscape'
-    ws1.page_setup.fitToPage=True
-    ws1.page_setup.fitToWidth=1
-
-    # ── Tab 2: Visual Timeline (one row per employee per day) ────────
-    # Layout: Col A = employee name (merged across 5 day rows),
-    #         Col B = day name,  Cols C+ = 30-min time slots 8am–9pm.
-    # Scroll vertically to compare employees; left-right shows time of day.
-    ws2 = wb.create_sheet("Visual Timeline")
-
-    N_SLOTS  = len(TIMELINE_SLOTS)   # 26 slots (8:00–20:30)
-    SLOT_COL = 3                     # time slots start at column C
-
-    ws2.column_dimensions['A'].width = 20   # employee name
-    ws2.column_dimensions['B'].width = 12   # day label
-    for ci in range(SLOT_COL, SLOT_COL + N_SLOTS):
-        ws2.column_dimensions[get_column_letter(ci)].width = 2.6
-
-    # Row 1: title
-    last_col_ltr = get_column_letter(SLOT_COL + N_SLOTS - 1)
-    ws2.merge_cells(f'A1:{last_col_ltr}1')
-    ws2.row_dimensions[1].height = 26
-    c = ws2['A1']
-    c.value     = (f"Staff Coverage Timeline  —  Week of {wk.strftime('%B %d, %Y')}"
-                   "  (Mon–Fri  |  8 AM – 9 PM  |  30-min slots)")
-    c.fill      = _xfill('1F4E79')
-    c.font      = _xfont(bold=True, color='FFFFFF', size=12)
-    c.alignment = _xalign()
-
-    # Row 2: column headers + time slot labels
-    ws2.row_dimensions[2].height = 24
-    for col, txt in [(1, 'Employee'), (2, 'Day')]:
-        c = ws2.cell(row=2, column=col, value=txt)
-        c.fill      = _xfill('D6E4F0')
-        c.font      = _xfont(bold=True, color='1F4E79', size=10)
-        c.alignment = _xalign()
-        c.border    = _xthin()
+    # ── Row 2: time-slot header ────────────────────────────────────────────────
+    ws.row_dimensions[cur].height = 24
+    for col, val, bg, color in [
+        (COL_NAME_L, 'Employee', 'D6E4F0', '1F4E79'),
+        (COL_NAME_R, 'Employee', 'D6E4F0', '1F4E79'),
+        (COL_HRS,    'Day Hrs',  'E2EFDA', '375623'),
+    ]:
+        c = ws.cell(row=cur, column=col, value=val)
+        c.fill = _xfill(bg); c.font = _xfont(bold=True, color=color, size=10)
+        c.alignment = _xalign(); c.border = _xthin()
 
     for si, slot in enumerate(TIMELINE_SLOTS):
         h, m = slot // 60, slot % 60
-        label = f"{h}" if m == 0 else f"{m}"   # show hour on-hour, :30 as "30"
-        c = ws2.cell(row=2, column=SLOT_COL + si, value=label)
-        c.fill      = _xfill('EBF3FB')
-        c.font      = Font(size=7, color='1F4E79', name='Calibri', bold=(m == 0))
-        c.alignment = Alignment(horizontal='center', vertical='bottom',
-                                text_rotation=90)
-        c.border    = Border(bottom=Side(style='thin', color='BFBFBF'),
-                             left=Side(style='hair', color='DDDDDD'))
+        c = ws.cell(row=cur, column=COL_SLOTS + si, value=(str(h) if m == 0 else f":{m}"))
+        c.fill = _xfill('EBF3FB')
+        c.font = Font(size=7, color='1F4E79', name='Calibri', bold=(m == 0))
+        c.alignment = Alignment(horizontal='center', vertical='bottom', text_rotation=90)
+        c.border = Border(bottom=Side(style='thin', color='BFBFBF'),
+                          left =Side(style='hair', color='DDDDDD'))
+    cur += 1
 
-    # Data rows — 5 rows per employee (Mon–Fri), then a thin separator row
-    cur = 3
-    for ei, emp in enumerate(employee_data):
-        emp_row_start = cur
+    # Accumulate weekly totals for the summary section
+    weekly_totals = {emp['name']: 0.0 for emp in employee_data}
 
-        for di in range(5):   # Mon=0 … Fri=4
-            ws2.row_dimensions[cur].height = 16
-            day_date  = wk + timedelta(days=di)
-            day_label = f"{WEEKDAYS_SHORT[di]}  {day_date.strftime('%m/%d')}"
-            row_bg    = 'F2F6FA' if ei % 2 == 0 else 'FAFAFA'
-            is_last_day = (di == 4)
+    # ── One section per day (Mon–Fri only) ────────────────────────────────────
+    DAY_HDR_BG = ['1F4E79'] * 5
+    ROW_ODD    = ['EEF3F8'] * 5
+    ROW_EVEN   = ['F7FAFB'] * 5
 
-            c = ws2.cell(row=cur, column=2, value=day_label)
-            c.font      = _xfont(size=9, bold=(di == 0))
-            c.alignment = _xalign(h='left')
-            c.fill      = _xfill(row_bg)
-            c.border    = Border(
-                bottom=Side(style='medium' if is_last_day else 'hair',
-                            color='BFBFBF' if is_last_day else 'E0E0E0'),
-                left=Side(style='thin', color='BFBFBF'),
-                right=Side(style='thin', color='BFBFBF'))
+    for di in range(5):
+        day_date = wk + timedelta(days=di)
 
-            # Compute this employee's shift for this day
-            s = emp['shifts'].get(di)
-            if s and not s['is_off']:
+        # Day header — full-width
+        ws.row_dimensions[cur].height = 20
+        ws.merge_cells(f'A{cur}:{last_ltr}{cur}')
+        c = ws.cell(row=cur, column=1,
+                    value=f"  {day_date.strftime('%A, %B %d, %Y').upper()}")
+        c.fill = _xfill(DAY_HDR_BG[di]); c.font = _xfont(bold=True, color='FFFFFF', size=11)
+        c.alignment = _xalign(h='left')
+        cur += 1
+
+        # One row per employee within this day
+        for ei, emp in enumerate(employee_data):
+            ws.row_dimensions[cur].height = 15
+            bg = ROW_ODD[di] if ei % 2 == 0 else ROW_EVEN[di]
+            s  = emp['shifts'].get(di)
+
+            if s and not s.get('is_off'):
+                hrs    = worked_hours(s['start_time'], s['end_time'], s['lunch_minutes'], False)
                 s_min  = to_min(s['start_time'])
                 e_min  = to_min(s['end_time'])
                 lm     = s.get('lunch_minutes', 0) or 0
                 ls_min = lunch_start_minutes(s['start_time'], s['end_time'],
                                              s.get('lunch_start_time'), lm)
                 le_min = (ls_min + lm) if ls_min is not None else None
+                weekly_totals[emp['name']] += hrs
             else:
-                s_min = e_min = ls_min = le_min = None
+                hrs    = 0.0
+                s_min  = e_min = ls_min = le_min = None
 
+            nb = Border(bottom=Side(style='hair', color='E0E0E0'),
+                        left =Side(style='thin', color='BFBFBF'),
+                        right=Side(style='thin', color='BFBFBF'))
+
+            # Name on left and right of grid
+            for col in (COL_NAME_L, COL_NAME_R):
+                c = ws.cell(row=cur, column=col, value=emp['name'])
+                c.font = _xfont(size=9, bold=True); c.alignment = _xalign(h='left')
+                c.fill = _xfill(bg); c.border = nb
+
+            # Time-slot cells
             for si, slot in enumerate(TIMELINE_SLOTS):
-                col   = SLOT_COL + si
                 color = slot_fill(slot, s_min, e_min, ls_min, le_min)
-                cell  = ws2.cell(row=cur, column=col)
-                cell.fill   = _xfill(color if color else row_bg)
-                cell.border = Border(
-                    bottom=Side(style='medium' if is_last_day else 'hair',
-                                color='BFBFBF' if is_last_day else 'E0E0E0'),
-                    left=Side(style='hair', color='D8D8D8'))
+                cell  = ws.cell(row=cur, column=COL_SLOTS + si)
+                cell.fill   = _xfill(color if color else bg)
+                cell.border = Border(bottom=Side(style='hair', color='E0E0E0'),
+                                     left =Side(style='hair', color='D8D8D8'))
+
+            # Daily hours — green fill
+            if s and s.get('is_off'):
+                hval, hbg, hcol = 'Off',         'F2F2F2', '888888'
+            elif hrs > 0:
+                hval, hbg, hcol = round(hrs, 1), 'E2EFDA', '375623'
+            else:
+                hval, hbg, hcol = '—',           'F2F2F2', '888888'
+
+            c = ws.cell(row=cur, column=COL_HRS, value=hval)
+            c.fill = _xfill(hbg); c.font = _xfont(bold=True, size=9, color=hcol)
+            c.alignment = _xalign(); c.border = _xthin()
             cur += 1
 
-        # Merge employee name vertically across 5 day rows
-        ws2.merge_cells(f'A{emp_row_start}:A{cur - 1}')
-        c = ws2.cell(row=emp_row_start, column=1, value=emp['name'])
-        c.font      = _xfont(bold=True, size=10)
-        c.alignment = Alignment(horizontal='left', vertical='center',
-                                wrap_text=False, indent=1)
-        c.fill      = _xfill('E8F0F8' if ei % 2 == 0 else 'EBF3FB')
-        c.border    = Border(
-            top=Side(style='medium', color='1F4E79'),
-            bottom=Side(style='medium', color='1F4E79'),
-            left=Side(style='medium', color='1F4E79'),
-            right=Side(style='thin', color='BFBFBF'))
-
-        # Thin separator row between employees
-        ws2.row_dimensions[cur].height = 4
+        # Thin gap row between days
+        ws.row_dimensions[cur].height = 5
         cur += 1
 
-    # Legend
-    leg = cur + 1
-    ws2.row_dimensions[leg].height = 16
-    ws2.cell(row=leg, column=1, value="Legend:").font = _xfont(bold=True, size=9)
-    for i, (color, lbl) in enumerate(
-            [('4472C4','On Shift'),('FFEB9C','Lunch Break'),('F2F6FA','Off / Not Working')]):
-        c = ws2.cell(row=leg, column=3 + i*2); c.fill=_xfill(color); c.border=_xthin()
-        c = ws2.cell(row=leg, column=4 + i*2, value=f"  {lbl}")
-        c.font=_xfont(size=9); c.alignment=_xalign(h='left')
+    # ── Weekly Hours Summary ───────────────────────────────────────────────────
+    cur += 1
 
-    ws2.freeze_panes = 'C3'
-    ws2.page_setup.orientation = 'landscape'
-    ws2.page_setup.fitToPage  = True
-    ws2.page_setup.fitToWidth = 1
+    ws.row_dimensions[cur].height = 22
+    ws.merge_cells(f'A{cur}:{last_ltr}{cur}')
+    c = ws.cell(row=cur, column=1, value='  Weekly Hours Summary')
+    c.fill = _xfill('1F4E79'); c.font = _xfont(bold=True, color='FFFFFF', size=11)
+    c.alignment = _xalign(h='left')
+    cur += 1
+
+    ws.row_dimensions[cur].height = 17
+    ws.merge_cells(f'A{cur}:{get_column_letter(COL_NAME_R)}{cur}')
+    c = ws.cell(row=cur, column=1, value='Employee')
+    c.fill = _xfill('D6E4F0'); c.font = _xfont(bold=True, color='1F4E79', size=10)
+    c.alignment = _xalign(); c.border = _xthin()
+    c = ws.cell(row=cur, column=COL_HRS, value='Total Hrs')
+    c.fill = _xfill('E2EFDA'); c.font = _xfont(bold=True, color='375623', size=10)
+    c.alignment = _xalign(); c.border = _xthin()
+    cur += 1
+
+    for ei, emp in enumerate(employee_data):
+        ws.row_dimensions[cur].height = 16
+        bg    = 'EEF3F8' if ei % 2 == 0 else 'F7FAFB'
+        total = weekly_totals[emp['name']]
+        ws.merge_cells(f'A{cur}:{get_column_letter(COL_NAME_R)}{cur}')
+        c = ws.cell(row=cur, column=1, value=emp['name'])
+        c.fill = _xfill(bg); c.font = _xfont(bold=True, size=11)
+        c.alignment = _xalign(h='left'); c.border = _xthin()
+        c = ws.cell(row=cur, column=COL_HRS, value=round(total, 1))
+        c.fill      = _xfill('C6EFCE' if total > 0 else 'F2F2F2')
+        c.font      = _xfont(bold=True, size=11, color='375623' if total > 0 else '888888')
+        c.alignment = _xalign(); c.border = _xthin()
+        cur += 1
+
+    cur += 1
+
+    # ── Legend ─────────────────────────────────────────────────────────────────
+    ws.row_dimensions[cur].height = 16
+    ws.cell(row=cur, column=1, value='Legend:').font = _xfont(bold=True, size=9)
+    for i, (color, lbl) in enumerate([
+        ('4472C4', 'On Shift'),
+        ('FFEB9C', 'Lunch Break'),
+        ('EEF3F8', 'Off / Not Working'),
+    ]):
+        c = ws.cell(row=cur, column=3 + i * 2)
+        c.fill = _xfill(color); c.border = _xthin()
+        c = ws.cell(row=cur, column=4 + i * 2, value=f"  {lbl}")
+        c.font = _xfont(size=9); c.alignment = _xalign(h='left')
+
+    ws.freeze_panes = 'B3'
+    ws.page_setup.orientation = 'landscape'
+    ws.page_setup.fitToPage   = True
+    ws.page_setup.fitToWidth  = 1
 
     return wb
 
