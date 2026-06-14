@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+schedule.db
+test_export.xlsx
+*.egg-info/
+.env
