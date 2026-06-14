@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Submit Your Schedule</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { background:#f0f4f8; min-height:100vh; display:flex; align-items:center; }
+    .card { border:none; border-radius:12px; box-shadow:0 2px 20px rgba(0,0,0,.1); overflow:hidden; }
+    .card-header { background:#1F4E79; color:#fff; padding:22px 28px; }
+    .card-header h1 { margin:0 0 3px; font-size:1.25rem; font-weight:700; }
+    .card-header p  { margin:0; color:#9DC3E6; font-size:.85rem; }
+    .card-body { padding:28px; }
+    .form-label { font-weight:700; color:#1F4E79; font-size:.82rem; letter-spacing:.04em; margin-bottom:4px; }
+    .name-input { text-transform:uppercase; letter-spacing:.08em; font-weight:600; font-size:1.05rem; }
+    select.form-select { font-size:1rem; }
+    .btn-submit { background:#1F4E79; border:none; font-size:1rem; font-weight:600; padding:13px; }
+    .btn-submit:hover, .btn-submit:focus { background:#163859; }
+  </style>
+</head>
+<body>
+<div class="container py-4" style="max-width:460px;">
+  <div class="card">
+    <div class="card-header">
+      <h1>Submit Your Schedule</h1>
+      <p>Week of {{ week_start.strftime('%B %d') }} – {{ week_end.strftime('%B %d, %Y') }}
+         &bull; Monday – Friday</p>
+    </div>
+    <div class="card-body">
+      {% if error %}
+      <div class="alert alert-warning py-2">{{ error }}</div>
+      {% endif %}
+
+      <form method="POST">
+        <input type="hidden" name="week" value="{{ week_start.isoformat() }}">
+
+        <div class="mb-3">
+          <label class="form-label">YOUR FIRST NAME</label>
+          <input type="text" class="form-control name-input" name="name"
+                 placeholder="e.g. ALICE" maxlength="30" required
+                 value="{{ request.form.get('name','') }}"
+                 oninput="this.value=this.value.toUpperCase()">
+          <div class="form-text">Enter your first name — it will appear in capitals.</div>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">START TIME</label>
+          <select class="form-select" name="start_mins">
+            {% for mins, label in start_opts %}
+            <option value="{{ mins }}" {% if mins == sel_start %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">FINISH TIME</label>
+          <select class="form-select" name="end_mins">
+            {% for mins, label in end_opts %}
+            <option value="{{ mins }}" {% if mins == sel_end %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="mb-4">
+          <label class="form-label d-block">LUNCH BREAK</label>
+          <div class="d-flex gap-4">
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="lunch_mins"
+                     value="30" id="l30" {% if sel_lunch == 30 %}checked{% endif %}>
+              <label class="form-check-label" for="l30">30 minutes</label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="lunch_mins"
+                     value="60" id="l60" {% if sel_lunch == 60 %}checked{% endif %}>
+              <label class="form-check-label" for="l60">60 minutes</label>
+            </div>
+          </div>
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-submit w-100">
+          Send My Schedule &rarr;
+        </button>
+      </form>
+    </div>
+  </div>
+</div>
+</body>
+</html>

@@ -91,6 +91,17 @@ def init_db():
             is_off           INTEGER NOT NULL DEFAULT 0,
             proposed_by      TEXT NOT NULL DEFAULT 'employee'
         );
+        CREATE TABLE IF NOT EXISTS simple_shifts (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            name          TEXT NOT NULL,
+            week_start    TEXT NOT NULL,
+            start_time    TEXT NOT NULL,
+            end_time      TEXT NOT NULL,
+            lunch_mins    INTEGER NOT NULL,
+            approve_token TEXT UNIQUE NOT NULL,
+            status        TEXT NOT NULL DEFAULT 'pending',
+            submitted_at  TEXT NOT NULL DEFAULT (datetime('now'))
+        );
     """)
     conn.commit()
     conn.close()
@@ -137,6 +148,15 @@ def slot_fill(slot, s_min, e_min, ls_min, le_min):
     if ls_min is not None and ls_min <= slot < le_min:
         return "FFEB9C"    # lunch — yellow
     return "4472C4"        # on shift — blue
+
+def fmt_12h(mins):
+    h, m = mins // 60, mins % 60
+    suf  = 'AM' if h < 12 else 'PM'
+    h12  = h % 12 or 12
+    return f"{h12}:{m:02d} {suf}"
+
+QUICK_START_OPTS = [(h*60+m, fmt_12h(h*60+m)) for h in range(6, 15) for m in (0, 30)]
+QUICK_END_OPTS   = [(h*60+m, fmt_12h(h*60+m)) for h in range(11, 23) for m in (0, 30)]
 
 def build_day_data(week_start, existing):
     """Build per-day dicts for form rendering."""
@@ -275,6 +295,76 @@ def accept_changes(token):
     conn.commit()
     conn.close()
     return render_template('submitted.html', name=req['name'], is_resubmit=True, quick_accept=True)
+
+# ─── Simple schedule form ────────────────────────────────────────────────────
+
+@app.route('/simple', methods=['GET', 'POST'])
+def simple_form():
+    week_str = request.args.get('week') or request.form.get('week', '')
+    if not week_str:
+        today      = date.today()
+        days_ahead = (7 - today.weekday()) % 7 or 7
+        week_str   = (today + timedelta(days=days_ahead)).isoformat()
+    try:
+        week_start = date.fromisoformat(week_str)
+    except ValueError:
+        return render_template('error.html', msg="Invalid week date in link.")
+
+    week_end  = week_start + timedelta(days=4)
+    sel_start = int(request.form.get('start_mins', 540))
+    sel_end   = int(request.form.get('end_mins', 1020))
+    sel_lunch = int(request.form.get('lunch_mins', 30))
+
+    if request.method == 'POST':
+        name = request.form.get('name', '').strip().upper()
+        if not name:
+            return render_template('simple_form.html',
+                week_start=week_start, week_end=week_end,
+                error="Please enter your first name.",
+                start_opts=QUICK_START_OPTS, end_opts=QUICK_END_OPTS,
+                sel_start=sel_start, sel_end=sel_end, sel_lunch=sel_lunch)
+        token = secrets.token_urlsafe(24)
+        conn  = db()
+        conn.execute("""
+            INSERT INTO simple_shifts
+              (name, week_start, start_time, end_time, lunch_mins, approve_token)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (name, week_str,
+              f"{sel_start//60:02d}:{sel_start%60:02d}",
+              f"{sel_end//60:02d}:{sel_end%60:02d}",
+              sel_lunch, token))
+        conn.commit()
+        conn.close()
+        cfg = get_config()
+        try:
+            _notify_manager_simple(name, week_start, sel_start, sel_end, sel_lunch, token, cfg)
+        except Exception as e:
+            app.logger.error(f"Simple notify failed: {e}")
+        return render_template('simple_submitted.html', name=name, week_start=week_start)
+
+    return render_template('simple_form.html',
+        week_start=week_start, week_end=week_end, error=None,
+        start_opts=QUICK_START_OPTS, end_opts=QUICK_END_OPTS,
+        sel_start=sel_start, sel_end=sel_end, sel_lunch=sel_lunch)
+
+
+@app.route('/approve/<token>')
+def simple_approve(token):
+    conn = db()
+    row  = conn.execute(
+        "SELECT * FROM simple_shifts WHERE approve_token=?", (token,)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return render_template('error.html', msg="This approval link is no longer valid.")
+    conn.execute("UPDATE simple_shifts SET status='approved' WHERE id=?", (row['id'],))
+    conn.commit()
+    conn.close()
+    return render_template('simple_approved.html',
+        name=row['name'],
+        week_start=date.fromisoformat(row['week_start']),
+        start_time=row['start_time'], end_time=row['end_time'],
+        lunch_mins=row['lunch_mins'])
 
 # ─── Manager routes ───────────────────────────────────────────────────────────
 
@@ -702,6 +792,34 @@ def _notify_manager(req, shifts, cfg):
         f"Schedule Submitted: {req['name']} — {ws.strftime('%b %d')}",
         _wrap(f"New submission from {req['name']}", body), cfg)
 
+def _notify_manager_simple(name, week_start, start_mins, end_mins, lunch_mins, approve_token, cfg):
+    base     = _base_url()
+    week_end = week_start + timedelta(days=4)
+    hrs_day  = max(0.0, (end_mins - start_mins - lunch_mins) / 60)
+    body = (
+        f"<p style='margin:0 0 14px;font-size:16px;color:#333;'>"
+        f"<strong>{name}</strong> submitted their preferred hours for "
+        f"<strong>{week_start.strftime('%B %d')} – {week_end.strftime('%B %d, %Y')}</strong>.</p>"
+        f"<table width='100%' cellpadding='0' cellspacing='0'"
+        f" style='border-collapse:collapse;margin:14px 0;'>"
+        f"<tr><td style='padding:10px 14px;background:#EEF3F8;font-size:14px;"
+        f"border-bottom:1px solid #ddd;'><strong>Days:</strong>&nbsp; Monday – Friday</td></tr>"
+        f"<tr><td style='padding:10px 14px;background:#fff;font-size:14px;"
+        f"border-bottom:1px solid #ddd;'><strong>Start time:</strong>&nbsp; {fmt_12h(start_mins)}</td></tr>"
+        f"<tr><td style='padding:10px 14px;background:#EEF3F8;font-size:14px;"
+        f"border-bottom:1px solid #ddd;'><strong>Finish time:</strong>&nbsp; {fmt_12h(end_mins)}</td></tr>"
+        f"<tr><td style='padding:10px 14px;background:#fff;font-size:14px;"
+        f"border-bottom:1px solid #ddd;'><strong>Lunch break:</strong>&nbsp; {lunch_mins} minutes</td></tr>"
+        f"<tr><td style='padding:10px 14px;background:#E2EFDA;font-size:14px;"
+        f"font-weight:bold;color:#375623;'>"
+        f"Daily total: {hrs_day:.1f} hrs &bull; Weekly total: {hrs_day*5:.1f} hrs</td></tr>"
+        f"</table>"
+        + _btn(f"{base}/approve/{approve_token}", "✓ Approve Schedule", bg='#2E7D32')
+    )
+    _smtp_send(cfg['manager_email'], cfg.get('manager_name', 'Manager'),
+        f"Schedule Request: {name}  —  Week of {week_start.strftime('%b %d, %Y')}",
+        _wrap(f"New schedule from {name}", body), cfg)
+
 def _send_changes(req, shifts, notes, cfg):
     base = _base_url()
     ws   = date.fromisoformat(req['week_start'])
@@ -744,6 +862,48 @@ def _send_approval(req, shifts, cfg):
     _smtp_send(req['email'], req['name'],
         f"Schedule Confirmed — Week of {ws.strftime('%b %d, %Y')}",
         _wrap(f"Confirmed: {ws.strftime('%B %d, %Y')}", body), cfg)
+
+@app.route('/admin/invite.eml')
+@mgr_only
+def download_invite_eml():
+    import email.utils as _eu
+    week_str = request.args.get('week', '')
+    if not week_str:
+        today      = date.today()
+        days_ahead = (7 - today.weekday()) % 7 or 7
+        week_str   = (today + timedelta(days=days_ahead)).isoformat()
+    week_start = date.fromisoformat(week_str)
+    week_end   = week_start + timedelta(days=4)
+    cfg        = get_config()
+    base       = _base_url()
+    form_url   = f"{base}/simple?week={week_str}"
+
+    html_body = _wrap(
+        f"Week of {week_start.strftime('%B %d, %Y')}",
+        (f"<p style='margin:0 0 14px;font-size:16px;color:#333;'>Hi,</p>"
+         f"<p style='margin:0 0 18px;font-size:15px;line-height:1.6;color:#555;'>"
+         f"Please submit your preferred hours for the week of "
+         f"<strong>{week_start.strftime('%B %d')} – {week_end.strftime('%B %d, %Y')}</strong>.</p>"
+         f"<p style='margin:0 0 22px;font-size:14px;line-height:1.6;color:#777;'>"
+         f"It only takes a minute — just your name, start time, finish time, and lunch break.</p>"
+         + _btn(form_url, "Submit My Schedule")
+         + f"<p style='margin:22px 0 0;font-size:12px;color:#bbb;'>"
+           f"Please submit by end of day Thursday. &bull; Do not reply to this email.</p>")
+    )
+    eml = (
+        f"MIME-Version: 1.0\r\n"
+        f"Date: {_eu.formatdate()}\r\n"
+        f"From: {cfg.get('manager_name','Manager')} <{cfg['manager_email']}>\r\n"
+        f"To: \r\n"
+        f"Subject: Your Schedule — Week of {week_start.strftime('%B %d, %Y')}\r\n"
+        f"Content-Type: text/html; charset=\"UTF-8\"\r\n"
+        f"\r\n"
+        f"{html_body}"
+    )
+    buf = BytesIO(eml.encode('utf-8'))
+    buf.seek(0)
+    return send_file(buf, mimetype='message/rfc822', as_attachment=True,
+                     download_name=f"invite_{week_str}.eml")
 
 # ─── CLI ─────────────────────────────────────────────────────────────────────
 

@@ -33,6 +33,8 @@
       {% if sel %}
       <a href="{{ url_for('export_excel', week_start=sel) }}"
          class="btn btn-success">⬇ Export Excel</a>
+      <a href="{{ url_for('download_invite_eml', week=sel) }}"
+         class="btn btn-outline-primary">📩 Download Invite .eml</a>
       {% endif %}
       <a href="{{ url_for('manager_logout') }}" class="btn btn-outline-secondary">Log out</a>
     </div>
