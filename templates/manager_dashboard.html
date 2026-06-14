@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Manager Dashboard</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { background:#f0f4f8; font-size:.88rem; }
+    .hdr { background:#1F4E79; color:#fff; padding:20px 28px; border-radius:10px; }
+    .hdr p { color:#9DC3E6; margin:4px 0 0; font-size:.85rem; }
+    .card-wrap { background:#fff; border-radius:10px; box-shadow:0 1px 5px rgba(0,0,0,.08); overflow:hidden; }
+    th { background:#D6E4F0; color:#1F4E79; font-size:.78rem; white-space:nowrap; }
+    td { vertical-align:middle; }
+    .cell-shift { font-size:.78rem; line-height:1.3; }
+    .cell-off   { color:#bbb; font-style:italic; font-size:.78rem; }
+    .cell-empty { color:#ddd; font-size:.78rem; }
+    .total-col  { background:#DAEEF3; font-weight:700; text-align:center; }
+    .wk-btn { font-size:.8rem; }
+    .table tbody tr:hover { background:#f5f9ff; }
+    .name-col { font-weight:600; color:#1F4E79; white-space:nowrap; }
+  </style>
+</head>
+<body>
+<div class="container-fluid py-4" style="max-width:1400px;">
+
+  <div class="d-flex justify-content-between align-items-start mb-3 flex-wrap gap-2">
+    <div class="hdr flex-grow-1">
+      <h1 style="font-size:1.3rem;font-weight:700;margin:0;">Manager Dashboard</h1>
+      <p>Employee Weekly Shift Schedules</p>
+    </div>
+    <div class="d-flex gap-2 ms-3 align-items-start flex-wrap">
+      {% if sel %}
+      <a href="{{ url_for('export_excel', week_start=sel) }}"
+         class="btn btn-success">⬇ Export Excel</a>
+      {% endif %}
+      <a href="{{ url_for('manager_logout') }}" class="btn btn-outline-secondary">Log out</a>
+    </div>
+  </div>
+
+  <!-- Week selector -->
+  <div class="mb-3 d-flex gap-2 flex-wrap">
+    {% for w in weeks %}
+    <a href="?week={{ w }}"
+       class="btn btn-sm wk-btn {% if w == sel %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+      {{ w }}
+    </a>
+    {% endfor %}
+    {% if not weeks %}
+    <span class="text-muted">No schedules yet. Run <code>python app.py send-invites --week YYYY-MM-DD</code> to start.</span>
+    {% endif %}
+  </div>
+
+  {% if sel %}
+  <!-- Status summary chips -->
+  <div class="mb-3 d-flex gap-2 flex-wrap">
+    {% set counts = {} %}
+    {% for r in rows %}{% set _ = counts.update({r.req.status: counts.get(r.req.status,0)+1}) %}{% endfor %}
+    {% for status,(label,cls) in [('pending',('Pending','secondary')),
+        ('submitted',('Submitted','primary')),
+        ('changes_requested',('Changes Sent','warning')),
+        ('employee_approved',('Employee Approved','info')),
+        ('approved',('Approved','success'))] %}
+    {% if counts.get(status,0) %}
+    <span class="badge bg-{{ cls }} fs-6 px-3 py-2">{{ label }}: {{ counts[status] }}</span>
+    {% endif %}
+    {% endfor %}
+  </div>
+
+  <div class="card-wrap">
+    <div class="table-responsive">
+      <table class="table table-bordered table-sm mb-0">
+        <thead>
+          <tr>
+            <th class="ps-3" style="min-width:160px;">Employee</th>
+            {% if week_start %}
+            {% for i in range(7) %}
+            <th class="text-center" style="min-width:95px;">
+              {{ days_short[i] }}<br>
+              <span style="font-weight:400;color:#555;">
+                {{ (week_start + loop.index0|int * __import__('datetime').timedelta(days=1)).strftime('%b %d') }}
+              </span>
+            </th>
+            {% endfor %}
+            {% endif %}
+            <th class="text-center" style="min-width:72px;">Total</th>
+            <th class="text-center" style="min-width:110px;">Status</th>
+            <th class="text-center" style="min-width:80px;">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+          <tr>
+            <td class="name-col ps-3">{{ row.req.name }}</td>
+
+            {% for i in range(7) %}
+            {% set s = row.shifts.get(i) %}
+            {% if s %}
+              {% if s.is_off %}
+              <td class="text-center cell-off">Day Off</td>
+              {% else %}
+              {% set hrs = worked_hours(s.start_time, s.end_time, s.lunch_minutes, s.is_off) %}
+              <td class="text-center cell-shift"
+                  style="background:{% if i < 5 %}#f0f7f0{% else %}#f3f1fd{% endif %};">
+                {{ s.start_time or '?' }}–{{ s.end_time or '?' }}<br>
+                <span style="color:#888;font-size:.72rem;">
+                  {% if s.lunch_minutes %}{{ s.lunch_minutes }}m lunch &bull; {% endif %}{{ '%.1f'|format(hrs) }}h
+                </span>
+              </td>
+              {% endif %}
+            {% else %}
+            <td class="text-center cell-empty">—</td>
+            {% endif %}
+            {% endfor %}
+
+            <td class="total-col">{{ row.total }}h</td>
+
+            <td class="text-center">
+              <span class="badge bg-{{ row.status_meta[1] }}">{{ row.status_meta[0] }}</span>
+            </td>
+
+            <td class="text-center">
+              {% if row.req.status not in ('pending',) %}
+              <a href="{{ url_for('manager_review', token=row.req.manager_token) }}"
+                 class="btn btn-xs btn-sm btn-outline-primary py-0 px-2" style="font-size:.78rem;">
+                {% if row.req.status == 'approved' %}View{% else %}Review{% endif %}
+              </a>
+              {% else %}
+              <span class="text-muted" style="font-size:.78rem;">Awaiting</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="11" class="text-center text-muted py-4">
+            No employees found for this week.
+          </td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
+</div>
+</body>
+</html>

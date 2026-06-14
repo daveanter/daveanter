@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Review — {{ req.name }}</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { background:#f0f4f8; }
+    .hdr  { background:#1F4E79; border-radius:10px; padding:22px 26px; color:#fff; }
+    .hdr p { color:#9DC3E6; margin:4px 0 0; font-size:.88rem; }
+    .day-card { background:#fff; border-radius:10px; padding:16px 18px; margin-bottom:10px;
+                box-shadow:0 1px 4px rgba(0,0,0,.07); }
+    .day-card.weekend { background:#faf9fe; }
+    .day-name  { font-weight:700; color:#1F4E79; font-size:1rem; }
+    .day-date  { color:#999; font-size:.8rem; }
+    .hrs-badge { background:#DAEEF3; color:#1F4E79; font-weight:700; border-radius:6px;
+                 padding:3px 11px; font-size:.88rem; min-width:68px; text-align:center;
+                 display:inline-block; }
+    .total-bar { background:#1F4E79; color:#fff; border-radius:10px; padding:16px 20px; }
+    label.small { color:#777; margin-bottom:3px; display:block; font-size:.78rem; }
+    .form-control, .form-select { font-size:.9rem; }
+    .btn-approve  { background:#2E7D32; color:#fff; border:none; }
+    .btn-approve:hover { background:#1B5E20; color:#fff; }
+    .btn-changes  { background:#E65100; color:#fff; border:none; }
+    .btn-changes:hover { background:#BF360C; color:#fff; }
+  </style>
+</head>
+<body>
+<div class="container py-4" style="max-width:700px;">
+
+  <div class="hdr mb-4">
+    <div class="d-flex justify-content-between align-items-start">
+      <div>
+        <h1 style="font-size:1.3rem;font-weight:700;margin:0;">Review Schedule</h1>
+        <p>{{ req.name }} &bull; Week of {{ week_start.strftime('%B %d') }} – {{ week_end.strftime('%B %d, %Y') }}</p>
+      </div>
+      <span class="badge bg-{{ status_meta[1] }} fs-6">{{ status_meta[0] }}</span>
+    </div>
+  </div>
+
+  <p class="text-muted mb-3" style="font-size:.88rem;">
+    Review the employee's proposed times. You can edit any day before approving or sending back.
+  </p>
+
+  <form method="post" id="sf">
+    {% for d in day_data %}
+    <div class="day-card{% if d.index >= 5 %} weekend{% endif %}" id="row-{{ d.index }}">
+      <div class="d-flex align-items-center justify-content-between">
+        <div>
+          <div class="day-name">{{ d.name }}</div>
+          <div class="day-date">{{ d.date }}</div>
+        </div>
+        <div class="d-flex align-items-center gap-3">
+          <span class="hrs-badge" id="hrs-{{ d.index }}">—</span>
+          <div class="form-check form-switch mb-0">
+            <input class="form-check-input" type="checkbox" role="switch"
+                   id="off-{{ d.index }}" name="d{{ d.index }}_off"
+                   {% if d.is_off %}checked{% endif %}
+                   onchange="toggleOff({{ d.index }})">
+            <label class="form-check-label text-muted" for="off-{{ d.index }}">Day Off</label>
+          </div>
+        </div>
+      </div>
+
+      <div class="row g-2 mt-2" id="times-{{ d.index }}"
+           style="{{ 'display:none;' if d.is_off else '' }}">
+        <div class="col-6 col-sm-3">
+          <label class="small">Start Time</label>
+          <input type="time" class="form-control" name="d{{ d.index }}_start"
+                 id="start-{{ d.index }}" value="{{ d.start_time }}"
+                 onchange="recalc({{ d.index }})">
+        </div>
+        <div class="col-6 col-sm-3">
+          <label class="small">Finish Time</label>
+          <input type="time" class="form-control" name="d{{ d.index }}_end"
+                 id="end-{{ d.index }}" value="{{ d.end_time }}"
+                 onchange="recalc({{ d.index }})">
+        </div>
+        <div class="col-6 col-sm-3">
+          <label class="small">Lunch Start</label>
+          <input type="time" class="form-control" name="d{{ d.index }}_lstart"
+                 id="lstart-{{ d.index }}"
+                 value="{{ d.lunch_start_time if d.lunch_start_time else '' }}"
+                 onchange="recalc({{ d.index }})">
+        </div>
+        <div class="col-6 col-sm-3">
+          <label class="small">Lunch Duration</label>
+          <select class="form-select" name="d{{ d.index }}_lunch"
+                  id="lunch-{{ d.index }}" onchange="recalc({{ d.index }})">
+            {% for mins, label in lunch_options %}
+            <option value="{{ mins }}" {% if mins == d.lunch_minutes %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+
+    <div class="total-bar d-flex justify-content-between align-items-center mb-4">
+      <span style="font-size:.95rem;font-weight:600;">Total Hours This Week</span>
+      <span id="total-hrs" style="font-size:1.5rem;font-weight:700;">{{ total_hours }} hrs</span>
+    </div>
+
+    <div class="mb-4">
+      <label class="form-label fw-semibold" style="color:#1F4E79;">
+        Note to employee <span class="text-muted fw-normal">(shown if requesting changes)</span>
+      </label>
+      <textarea class="form-control" name="manager_notes" rows="3"
+                placeholder="e.g. We need you to cover Thursday afternoon instead…">{{ req.manager_notes }}</textarea>
+    </div>
+
+    <div class="d-flex gap-3">
+      <button type="submit" name="action" value="approve"
+              class="btn btn-lg flex-grow-1 btn-approve fw-bold" style="border-radius:8px;padding:14px;">
+        ✓ Approve Schedule
+      </button>
+      <button type="submit" name="action" value="request_changes"
+              class="btn btn-lg flex-grow-1 btn-changes fw-bold" style="border-radius:8px;padding:14px;">
+        ✎ Request Changes
+      </button>
+    </div>
+
+    <a href="{{ url_for('manager_dashboard', week=req.week_start) }}"
+       class="btn btn-link text-muted mt-3 d-block text-center">← Back to dashboard</a>
+  </form>
+</div>
+
+<script>
+  function toMin(t){if(!t)return null;const[h,m]=t.split(':').map(Number);return h*60+m;}
+  function recalc(i){
+    const badge=document.getElementById('hrs-'+i);
+    if(document.getElementById('off-'+i).checked){badge.textContent='Day Off';updateTotal();return;}
+    const s=toMin(document.getElementById('start-'+i).value);
+    const e=toMin(document.getElementById('end-'+i).value);
+    const lm=parseInt(document.getElementById('lunch-'+i).value)||0;
+    if(s===null||e===null){badge.textContent='—';updateTotal();return;}
+    const hrs=Math.max(0,(e-s-lm)/60);
+    badge.textContent=hrs.toFixed(1)+' hrs';
+    updateTotal();
+  }
+  function toggleOff(i){
+    document.getElementById('times-'+i).style.display=
+      document.getElementById('off-'+i).checked?'none':'';
+    recalc(i);
+  }
+  function updateTotal(){
+    let t=0;
+    for(let i=0;i<7;i++){const v=parseFloat(document.getElementById('hrs-'+i).textContent);if(!isNaN(v))t+=v;}
+    document.getElementById('total-hrs').textContent=t.toFixed(1)+' hrs';
+  }
+  document.addEventListener('DOMContentLoaded',()=>{for(let i=0;i<7;i++)recalc(i);});
+</script>
+</body>
+</html>

@@ -328,12 +328,191 @@ def build_blank_template(wb: Workbook):
     ws.page_setup.fitToWidth = 1
 
 
+# ─────────────────────────── Visual timeline ─────────────────────────────────
+
+# 30-minute slots from 8 AM to 9 PM
+_TSLOTS = list(range(8 * 60, 21 * 60, 30))   # 26 slots
+
+def _slot_color(slot_min, s_min, e_min, ls_min, le_min):
+    """Return hex color for a timeline slot, or None if unworked."""
+    if s_min is None or e_min is None:
+        return None
+    if slot_min < s_min or slot_min >= e_min:
+        return None
+    if ls_min is not None and ls_min <= slot_min < le_min:
+        return "FFEB9C"   # lunch — yellow
+    return "4472C4"       # on shift — blue
+
+def _shift_times(code):
+    """Convert a shift code to (start_min, end_min, lunch_start_min, lunch_end_min).
+    Clamps to the 8 AM–9 PM timeline window."""
+    info = SHIFTS.get(code, SHIFTS["OFF"])
+    _, start_str, end_str, hrs = info
+    if not start_str or not end_str:
+        return None, None, None, None
+
+    def t(s): h, m = map(int, s.split(":")); return h * 60 + m
+
+    s_min = t(start_str)
+    e_min = t(end_str)
+    if e_min <= s_min:       # overnight shift — push end to next day
+        e_min += 24 * 60
+
+    TL_S, TL_E = 8 * 60, 21 * 60
+    s_min = max(s_min, TL_S)
+    e_min = min(e_min, TL_E)
+    if s_min >= e_min:
+        return None, None, None, None
+
+    # Estimate 30-min lunch at midpoint for long shifts
+    if hrs >= 6:
+        mid = ((s_min + e_min) // 2) // 30 * 30   # snap to slot boundary
+        ls_min, le_min = mid, mid + 30
+    else:
+        ls_min = le_min = None
+
+    return s_min, e_min, ls_min, le_min
+
+
+def build_visual_timeline(wb: Workbook):
+    """Visual Gantt-style timeline: one row per employee per day (Mon–Fri).
+    Columns = 30-min time slots 8 AM–9 PM.  Scroll vertically to compare employees."""
+    ws = wb.create_sheet("Visual Timeline")
+
+    N_SLOTS  = len(_TSLOTS)    # 26
+    SLOT_COL = 3               # time slot columns start at C
+
+    ws.column_dimensions["A"].width = 20   # employee name
+    ws.column_dimensions["B"].width = 12   # day label
+    for ci in range(SLOT_COL, SLOT_COL + N_SLOTS):
+        ws.column_dimensions[get_column_letter(ci)].width = 2.6
+
+    # Row 1: title
+    last_col = get_column_letter(SLOT_COL + N_SLOTS - 1)
+    ws.merge_cells(f"A1:{last_col}1")
+    ws.row_dimensions[1].height = 26
+    c = ws["A1"]
+    c.value = (f"Staff Coverage Timeline  —  Week of {WEEK_START.strftime('%B %d, %Y')}"
+               "  (Mon–Fri  |  8 AM – 9 PM  |  30-min slots)")
+    c.fill      = PatternFill("solid", fgColor="1F4E79")
+    c.font      = Font(bold=True, color="FFFFFF", size=12, name="Calibri")
+    c.alignment = Alignment(horizontal="center", vertical="center")
+
+    # Row 2: headers + time labels
+    ws.row_dimensions[2].height = 24
+    thin = lambda: Border(
+        top=Side(style="thin", color="BFBFBF"),
+        bottom=Side(style="thin", color="BFBFBF"),
+        left=Side(style="thin", color="BFBFBF"),
+        right=Side(style="thin", color="BFBFBF"),
+    )
+    for col, txt in [(1, "Employee"), (2, "Day")]:
+        c = ws.cell(row=2, column=col, value=txt)
+        c.fill      = PatternFill("solid", fgColor="D6E4F0")
+        c.font      = Font(bold=True, color="1F4E79", size=10, name="Calibri")
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        c.border    = thin()
+
+    for si, slot in enumerate(_TSLOTS):
+        h, m = slot // 60, slot % 60
+        label = str(h) if m == 0 else "30"
+        c = ws.cell(row=2, column=SLOT_COL + si, value=label)
+        c.fill      = PatternFill("solid", fgColor="EBF3FB")
+        c.font      = Font(size=7, color="1F4E79", name="Calibri", bold=(m == 0))
+        c.alignment = Alignment(horizontal="center", vertical="bottom", text_rotation=90)
+        c.border    = Border(
+            bottom=Side(style="thin", color="BFBFBF"),
+            left=Side(style="hair", color="DDDDDD"),
+        )
+
+    DAYS_WD = ["Monday","Tuesday","Wednesday","Thursday","Friday"]
+    DAYS_SH = ["Mon","Tue","Wed","Thu","Fri"]
+
+    cur = 3
+    for ei, emp_row in enumerate(SCHEDULE):
+        # emp_row: ["Alice", "M", "A", "OFF", ...]  (index 0=name, 1-7=Mon-Sun)
+        emp_name   = EMPLOYEES[ei] if ei < len(EMPLOYEES) else emp_row[0]
+        emp_start  = cur
+        row_bg     = "F2F6FA" if ei % 2 == 0 else "FAFAFA"
+        name_bg    = "E8F0F8" if ei % 2 == 0 else "EBF3FB"
+
+        for di in range(5):   # Mon=0, Fri=4
+            ws.row_dimensions[cur].height = 16
+            code      = emp_row[1 + di] if len(emp_row) > 1 + di else "OFF"
+            day_date  = WEEK_START + __import__("datetime").timedelta(days=di)
+            day_label = f"{DAYS_SH[di]}  {day_date.strftime('%m/%d')}"
+            is_last   = (di == 4)
+
+            c = ws.cell(row=cur, column=2, value=day_label)
+            c.font      = Font(size=9, bold=(di == 0), name="Calibri")
+            c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+            c.fill      = PatternFill("solid", fgColor=row_bg)
+            c.border    = Border(
+                bottom=Side(style="medium" if is_last else "hair",
+                            color="BFBFBF" if is_last else "E0E0E0"),
+                left=Side(style="thin", color="BFBFBF"),
+                right=Side(style="thin", color="BFBFBF"),
+            )
+
+            s_min, e_min, ls_min, le_min = _shift_times(code)
+
+            for si, slot in enumerate(_TSLOTS):
+                col   = SLOT_COL + si
+                color = _slot_color(slot, s_min, e_min, ls_min, le_min)
+                cell  = ws.cell(row=cur, column=col)
+                cell.fill   = PatternFill("solid", fgColor=color if color else row_bg)
+                cell.border = Border(
+                    bottom=Side(style="medium" if is_last else "hair",
+                                color="BFBFBF" if is_last else "E0E0E0"),
+                    left=Side(style="hair", color="D8D8D8"),
+                )
+            cur += 1
+
+        # Merge employee name across 5 day rows
+        ws.merge_cells(f"A{emp_start}:A{cur - 1}")
+        c = ws.cell(row=emp_start, column=1, value=emp_name)
+        c.font      = Font(bold=True, size=10, name="Calibri")
+        c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+        c.fill      = PatternFill("solid", fgColor=name_bg)
+        c.border    = Border(
+            top=Side(style="medium", color="1F4E79"),
+            bottom=Side(style="medium", color="1F4E79"),
+            left=Side(style="medium", color="1F4E79"),
+            right=Side(style="thin", color="BFBFBF"),
+        )
+
+        # Thin separator between employees
+        ws.row_dimensions[cur].height = 4
+        cur += 1
+
+    # Legend
+    leg = cur + 1
+    ws.row_dimensions[leg].height = 16
+    ws.cell(row=leg, column=1, value="Legend:").font = Font(bold=True, size=9, name="Calibri")
+    for i, (color, lbl) in enumerate([
+            ("4472C4", "On Shift"),
+            ("FFEB9C", "Lunch (estimated midpoint)"),
+            ("F2F6FA", "Off / Not Working")]):
+        c = ws.cell(row=leg, column=3 + i * 3)
+        c.fill   = PatternFill("solid", fgColor=color)
+        c.border = thin()
+        c = ws.cell(row=leg, column=4 + i * 3, value=f"  {lbl}")
+        c.font      = Font(size=9, name="Calibri")
+        c.alignment = Alignment(horizontal="left", vertical="center")
+
+    ws.freeze_panes = "C3"
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToPage   = True
+    ws.page_setup.fitToWidth  = 1
+
+
 # ─────────────────────────── Main ────────────────────────────────────────────
 
 def main():
     wb = Workbook()
     build_schedule(wb)
     build_blank_template(wb)
+    build_visual_timeline(wb)
 
     out_path = "employee_weekly_schedule.xlsx"
     wb.save(out_path)

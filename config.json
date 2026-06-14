@@ -1,0 +1,27 @@
+{
+  "manager_email":    "manager@example.com",
+  "manager_name":     "Your Name",
+  "manager_password": "changeme123",
+
+  "base_url": "http://YOUR-IP-OR-DOMAIN:5000",
+
+  "smtp": {
+    "host":       "smtp.gmail.com",
+    "port":       587,
+    "username":   "you@gmail.com",
+    "password":   "your-app-password",
+    "from_email": "you@gmail.com",
+    "from_name":  "Shift Scheduler"
+  },
+
+  "employees": [
+    { "name": "Alice Johnson",  "email": "alice@example.com"  },
+    { "name": "Bob Martinez",   "email": "bob@example.com"    },
+    { "name": "Carol Smith",    "email": "carol@example.com"  },
+    { "name": "David Lee",      "email": "david@example.com"  },
+    { "name": "Emma Wilson",    "email": "emma@example.com"   },
+    { "name": "Frank Brown",    "email": "frank@example.com"  },
+    { "name": "Grace Kim",      "email": "grace@example.com"  },
+    { "name": "Henry Davis",    "email": "henry@example.com"  }
+  ]
+}
